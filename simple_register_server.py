@@ -22,23 +22,21 @@ START_CMD = b"STARTCMD"       # 8-byte start command
 REG_DATA_HEADER = b"REG_DATA" # 8-byte header for register data payload
 
 # 3. Implement the dec_to_hex_to_float helper function
-def dec_to_hex_to_float(value: int) -> float:
+def dec_to_hex_to_float(value):
     """
     Interpret an integer (presumably from a 32-bit register) as a float.
     The original name is a bit misleading; it's not converting to hex string first.
     It directly interprets the integer bits as a float.
     """
     try:
-        # Pack integer into 4 bytes (big-endian, unsigned int)
+        # '!I' packs as unsigned int. If value is negative or too large,
+        # struct.pack will raise struct.error.
         packed_value = struct.pack('!I', value)
-        # Unpack those 4 bytes as a big-endian float
         float_value = struct.unpack('!f', packed_value)[0]
-        return float_value
     except struct.error as e:
-        print(f"Error in dec_to_hex_to_float: {e} for value {value}")
-        # Depending on how errors should be propagated, either raise or return a special value.
-        # For this server, we'll let it propagate to be caught by the per-register error handling.
-        raise
+        print(f"Warning: Could not convert integer {value} to float (struct error: {e}). Returning 0.0.")
+        return 0.0 # Fallback value for conversion errors
+    return float_value
 
 def main():
     # 4. Initialize rw_mio.MMIO
