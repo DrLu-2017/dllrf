@@ -1,21 +1,16 @@
 # -- coding: utf-8 --**
-import os
 import socket
 import sys
-import time
-from pathlib import Path
-import subprocess
 import rw_mio
 import struct
 import math
-import re
-import json
 import CS_bigdata
 import statistics
+import json
 from register_map import registers
 #ip_server = '172.17.3.61'
-ip_server = '192.168.87.90'
-port_server = 50003
+ip_server = '192.168.87.90' # Will be replaced by command-line arg
+port_server = 50003 # Will be replaced by command-line arg
 
 '''
 bram_size_in_8b  = 8192  # for two bram total 8k=8*1024
@@ -47,8 +42,6 @@ class server_socket(object):
             # 6) Fermeture de la connexion :
             self.connexion.close()
             print ("Disconnected.")
-    def chunks(self,arr,n):
-        return [arr[i:i+n] for i in range(0, len(arr), n)]
     def unpack_IQ_data(self, data):
             # Seperate I/Q data from bram_data block
 
@@ -68,8 +61,6 @@ class server_socket(object):
         # one BRAM = 8K bytes
         self.bram_data =[]
         for offset in self.bram_start_offset:
-            # print(f'offset:{hex(offset)}')
-            # print(f'offset:{hex(offset)}')
             txt = self.rw_bram.read(offset, 8*1024) # 8K  lines , each line has 4 bytes,
                                         # but, only 1 line has data every 4 lines
                                         # so, finally, 8K * 4 / 4 = 8 K bytes        
@@ -120,8 +111,6 @@ class server_socket(object):
         # one BRAM = 8K bytes
         self.bram_data =[]
         for offset in self.bram_start_offset:
-            #print(f'offset:{hex(offset)}')
-            # print(f'offset:{hex(offset)}')
             txt = self.rw_bram.read(offset, 8*1024) # 8K  lines , each line has 4 bytes,
                                         # but, only 1 line has data every 4 lines
                                         # so, finally, 8K * 4 / 4 = 8 K bytes        

@@ -1,7 +1,6 @@
 from ConnectServer import ConnectServer
 from PyQt5.QtWidgets import QMainWindow, QApplication
-import matplotlib as plt
-import matplotlib.pyplot as pyplt
+# # import matplotlib.pyplot as pyplt # Unused
 from Plotter import CustomWidget
 from PyQt5 import QtWidgets, uic
 from pyqtgraph.Qt import QtCore
@@ -14,13 +13,13 @@ import pandas as pd
 from qasync import QEventLoop
 import sys
 import time
-import re
-import string
-#from apscheduler.schedulers.blocking import BlockingScheduler
+# import re # Unused
+# import string # Unused
+# #from apscheduler.schedulers.blocking import BlockingScheduler # Unused
 import struct
 import numpy as np
 import math
-# import pandas as pd
+# import pandas as pd # Duplicate
 from xlutils.copy import copy
 import xlrd
 
@@ -40,7 +39,7 @@ import asyncio
 
 t = 0  # write/read config from line 0
 n_bit = 5
-lock = threading.Lock()
+# lock = threading.Lock() # Unused
 # upload to gitlab
 file = 'config.xlsx'
 class llrf_graph_window(QtWidgets.QMainWindow):
@@ -49,8 +48,8 @@ class llrf_graph_window(QtWidgets.QMainWindow):
         # Load the UI Page
         self.plot_time = 1000
         self._pause_flag = False
-        # self.addr_adc01_gain = 0xb0010000
-        #  self.addr_adc23_gain = 0xb0020000
+        # # self.addr_adc01_gain = 0xb0010000 # Unused
+        # #  self.addr_adc23_gain = 0xb0020000 # Unused
         self.ui = uic.loadUi("UI_llrf_4.3.ui", self)
         self.setWindowTitle("LLRF - Soleil - expert")
         self.user_mode()
@@ -61,14 +60,14 @@ class llrf_graph_window(QtWidgets.QMainWindow):
         self.timer = QtCore.QTimer()
         self.timer.setInterval(self.plot_time)
         self.load_config()  
-        self.n0 = 0
-        self.n1 = 0
-        self.n4 = 0
-        self.n5 = 0
-        self.n6 = 0
-        self.n7 = 0
-        self.n_buf_q = [[] for _ in range(8)]
-        self.n_buf_i = [[] for _ in range(8)]
+        # self.n0 = 0 # Unused
+        # self.n1 = 0 # Unused
+        # self.n4 = 0 # Unused
+        # self.n5 = 0 # Unused
+        # self.n6 = 0 # Unused
+        # self.n7 = 0 # Unused
+        # self.n_buf_q = [[] for _ in range(8)] # Unused
+        # self.n_buf_i = [[] for _ in range(8)] # Unused
         #self.child_pi_controler = None
         self.PI = 3.14159265
 
