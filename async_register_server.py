@@ -438,4 +438,3 @@ if __name__ == "__main__":
         # No need to re-initialize mmio_instance here; main() does it.
 
     asyncio.run(main())
-```
