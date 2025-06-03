@@ -3,6 +3,7 @@ import asyncio
 import json
 import struct
 import logging
+import math
 
 from qasync import QEventLoop, asyncSlot, asyncClose
 
@@ -29,6 +30,25 @@ REG_DATA_SNAPSHOT_HEADER = b"REG_SNAP" # 8 bytes
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # logger = logging.getLogger(__name__) # Moved to class as self.logger
+
+def int_bits_to_float(value: int) -> float:
+    """
+    Interprets the bits of a 32-bit integer as a single-precision float.
+    Assumes network byte order (big-endian) for packing/unpacking.
+    """
+    try:
+        # The value from server is result of struct.unpack('>I', packed_val)[0] in read_register (server)
+        # or struct.pack('>I', value) was used for server's read response.
+        # Server read response: RESP_READ_SUCCESS + struct.pack('>I', value)
+        # So client receives an integer already. It needs to pack it again to then unpack as float.
+        packed_value = struct.pack('!I', value) # Pack as network byte order (big-endian) unsigned 32-bit integer
+        float_value = struct.unpack('!f', packed_value)[0] # Unpack as network byte order single-precision float
+        return float_value
+    except struct.error as e:
+        # Accessing self.logger might be an issue if this is a global function.
+        # For now, print, or pass logger in, or make it a method.
+        print(f"Error converting int {hex(value)} to float: {e}")
+        return math.nan # Return NaN for conversion errors
 
 class AsyncClientApp(QMainWindow):
     def __init__(self, loop=None):
@@ -263,10 +283,27 @@ class AsyncClientApp(QMainWindow):
 
                 if prefix == self.RESP_READ_SUCCESS:
                     packed_val = await self.reader.readexactly(4)
-                    value = struct.unpack('>I', packed_val)[0]
-                    self.logger.info(f"Read successful: value={hex(value)}")
-                    self.loop.call_soon_threadsafe(self.val_edit.setText, hex(value))
-                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, f"Read successful: {hex(value)}")
+                    # Server sends value packed as big-endian unsigned int.
+                    # The server's CMD_READ_REG handler uses: struct.pack('>I', value)
+                    # So, client must unpack with '>I'.
+                    raw_int_value = struct.unpack('>I', packed_val)[0]
+
+                    self.logger.info(f"Read successful: raw_value={hex(raw_int_value)}")
+
+                    # Convert the raw integer bits to a float
+                    float_value = int_bits_to_float(raw_int_value) # Assumes int_bits_to_float is defined globally or accessible
+
+                    # Format float for display (e.g., up to 7 significant digits, or scientific notation if large/small)
+                    # Using .7g should be reasonable for most float values.
+                    float_display_str = f"{float_value:.7g}"
+
+                    # Update the QLineEdit to show the float value
+                    self.loop.call_soon_threadsafe(self.val_edit.setText, float_display_str)
+
+                    # Update status bar to show both float and raw hex
+                    status_message = f"Read successful: {float_display_str} (raw: {hex(raw_int_value)})"
+                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, status_message)
+                    self.logger.info(status_message)
                 elif prefix == self.RESP_READ_ERROR:
                     packed_len = await self.reader.readexactly(4)
                     msg_len = struct.unpack('>I', packed_len)[0]
