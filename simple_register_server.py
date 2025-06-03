@@ -91,7 +91,7 @@ def main():
                     print(f"Reading {len(registers)} registers...")
                     if not registers:
                         print("Register map is empty. Nothing to send.")
-                    
+
                     for reg_name, abs_address in registers.items():
                         try:
                             # i. Calculate offset
@@ -105,20 +105,20 @@ def main():
                                 print(f"Skipping register {reg_name}: Calculated negative offset ({offset}) for address {hex(abs_address)}. DATA_MAP_START is {hex(DATA_MAP_START)}.")
                                 register_data_to_send[reg_name] = f"Error: Negative offset for address {hex(abs_address)}"
                                 continue
-                            
+
                             # ii. Try to read raw_value
                             raw_value = mmio.read32(offset)
-                            
+
                             # iii. Try to convert float_value
                             float_value = dec_to_hex_to_float(raw_value)
-                            
+
                             # iv. Store float_value or an error string
                             register_data_to_send[reg_name] = float_value
 
                         except Exception as e_reg:
                             print(f"Error processing register {reg_name} (addr: {hex(abs_address)}, offset: {hex(offset if 'offset' in locals() else -1)}): {e_reg}")
                             register_data_to_send[reg_name] = f"Error: {str(e_reg)}"
-                    
+
                     if not register_data_to_send:
                         print("No register data was collected (map might be empty or all registers failed).")
                         # Optionally send an empty response or an error message to client here
@@ -156,7 +156,7 @@ def main():
                     # f. Send the UTF-8 encoded JSON string
                     conn.sendall(json_bytes)
                     print("Sent JSON data payload.")
-                
+
                 else:
                     print(f"Invalid or missing START command from {addr}. Received: {received_cmd}")
                     # No data sent, connection will be closed in finally.
@@ -172,7 +172,7 @@ def main():
                 if conn:
                     print(f"Closing connection with {addr}")
                     conn.close()
-    
+
     except KeyboardInterrupt:
         print("\nServer shutting down due to KeyboardInterrupt.")
     except Exception as e_server:
@@ -212,7 +212,7 @@ if __name__ == "__main__":
                 f.write("    'FALLBACK_DUMMY_REG_2': 0x80000004,\n")
                 f.write("}\n")
             from register_map import registers # Try importing the singular version
-    
+
     # Create a dummy rw_mio.py if it doesn't exist for basic testing
     try:
         import rw_mio

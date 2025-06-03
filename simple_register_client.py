@@ -49,7 +49,7 @@ class SimpleClientApp(QMainWindow):
         self.connect_button = QPushButton("Connect & Fetch Data")
         self.connect_button.clicked.connect(self.connect_and_fetch_data)
         connection_layout.addWidget(self.connect_button)
-        
+
         connection_layout.addStretch(1) # Pushes elements to the left
 
         main_layout.addLayout(connection_layout)
@@ -94,7 +94,7 @@ class SimpleClientApp(QMainWindow):
             QApplication.processEvents()
 
             # Set timeout for receiving response header
-            self.sock.settimeout(15.0) 
+            self.sock.settimeout(15.0)
 
             # Receive 8-byte header
             header = self.sock.recv(len(self.REG_DATA_HEADER)) # Use constant for length
@@ -123,9 +123,9 @@ class SimpleClientApp(QMainWindow):
                     return
                 json_data_bytes += chunk
                 bytes_received += len(chunk)
-            
+
             json_data_str = json_data_bytes.decode('utf-8')
-            
+
             # Deserialize JSON
             try:
                 register_data = json.loads(json_data_str)
@@ -137,7 +137,7 @@ class SimpleClientApp(QMainWindow):
             # Populate table
             self.tableWidget.setRowCount(0) # Clear existing rows
             self.tableWidget.setRowCount(len(register_data))
-            
+
             row = 0
             for reg_name, value in register_data.items():
                 self.tableWidget.setItem(row, 0, QTableWidgetItem(str(reg_name)))
@@ -148,7 +148,7 @@ class SimpleClientApp(QMainWindow):
                     item = QTableWidgetItem(str(value))
                 self.tableWidget.setItem(row, 1, item)
                 row += 1
-            
+
             self.tableWidget.resizeColumnsToContents()
             self.statusBar.showMessage("Data fetched and displayed successfully.", 5000) # Disappears after 5s
 
