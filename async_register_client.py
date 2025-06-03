@@ -23,7 +23,7 @@ except ImportError:
 
 
 # Constants
-SERVER_HOST_DEFAULT = 'localhost'
+SERVER_HOST_DEFAULT = '192.168.87.90'
 SERVER_PORT_DEFAULT = 50005
 REG_DATA_SNAPSHOT_HEADER = b"REG_SNAP" # 8 bytes
 
