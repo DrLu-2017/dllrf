@@ -161,17 +161,20 @@ class AsyncClientApp(QMainWindow):
     def populate_reg_combo(self):
         self.reg_combo.addItem("Select Register...", None) # Add a placeholder item
         if reg_dict and "ERROR_LOADING_REG_DICT" not in reg_dict:
-            for name, address in reg_dict.items():
-                self.reg_combo.addItem(name, address) # Store address as item data
+            for name, reg_info in reg_dict.items(): # reg_dict.items() now yields name, dict
+                self.reg_combo.addItem(name, reg_info) # Store full dict as item data
         else:
             self.reg_combo.addItem("Error loading registers", None)
             self.reg_combo.setEnabled(False)
 
     def on_reg_combo_changed(self, text):
-        address = self.reg_combo.currentData()
-        if address is not None:
-            self.addr_edit.setText(hex(address))
-        elif text == "Select Register...": # Clear if placeholder selected
+        reg_info = self.reg_combo.currentData() # currentData() now returns the dict
+        if reg_info and isinstance(reg_info, dict): # Check if it's a valid dict
+            self.addr_edit.setText(hex(reg_info["address"]))
+            # Optionally, you could display the type as well
+            # reg_type = reg_info.get("type", "N/A")
+            # self.statusBar().showMessage(f"Selected: {text}, Type: {reg_type}, Address: {hex(reg_info['address'])}")
+        elif text == "Select Register..." or reg_info is None: # Clear if placeholder or no data
              self.addr_edit.setText("")
 
     # Helper to parse address/value inputs (supporting hex and dec)
@@ -495,29 +498,47 @@ class AsyncClientApp(QMainWindow):
             self.statusBar().showMessage("Not connected to server.")
             return
 
-        address_str = self.addr_edit.text()
-        abs_address = self._parse_input_value(address_str, "Address")
-        if abs_address is None:
+        reg_info = self.reg_combo.currentData()
+        if not reg_info or not isinstance(reg_info, dict) : # "Select Register..." or invalid data
+            self.statusBar().showMessage("Please select a valid register.")
             return
+
+        abs_address = reg_info["address"] # Already an int
+        reg_type = reg_info.get("type", "int") # Default to int if type not specified
 
         value_str = self.val_edit.text()
-        value_to_write = self._parse_input_value(value_str, "Value")
-        if value_to_write is None:
-            return
+        value_to_write = None
 
-        if not (0 <= value_to_write <= 0xFFFFFFFF):
-            self.statusBar().showMessage("Error: Value out of range for 32-bit register.")
-            return
+        if reg_type == "float":
+            try:
+                float_val = float(value_str)
+                # Convert float to its 32-bit big-endian binary representation, then to int
+                packed_bytes = struct.pack('>f', float_val)
+                value_to_write = int.from_bytes(packed_bytes, 'big')
+            except ValueError:
+                self.statusBar().showMessage(f"Error: Invalid float value '{value_str}'.")
+                return
+            except Exception as e: # Other struct/packing errors
+                self.statusBar().showMessage(f"Error converting float: {e}")
+                return
+        else: # int or default
+            value_to_write = self._parse_input_value(value_str, "Value")
+            if value_to_write is None:
+                return # Error message already shown by _parse_input_value
+            if not (0 <= value_to_write <= 0xFFFFFFFF): # Check range for unsigned 32-bit int
+                self.statusBar().showMessage("Error: Integer value out of range for 32-bit register (0 to 0xFFFFFFFF).")
+                return
 
-        self.statusBar().showMessage(f"Writing {hex(value_to_write)} to {hex(abs_address)}...")
+        # At this point, value_to_write is an integer (either the direct int or the float's bit pattern)
+        self.statusBar().showMessage(f"Writing {value_str} (as {hex(value_to_write)}) to {reg_info.get('name', hex(abs_address))} ({reg_type})...")
         try:
             cmd = b"WR_RG"
             packed_addr = struct.pack('>I', abs_address)
-            packed_val = struct.pack('>I', value_to_write)
+            packed_val = struct.pack('>I', value_to_write) # Server expects a 32-bit unsigned int
 
             self.writer.write(cmd + packed_addr + packed_val)
             await self.writer.drain()
-            self.logger.info(f"Sent WRITE command for address {hex(abs_address)} with value {hex(value_to_write)}.")
+            self.logger.info(f"Sent WRITE command for {reg_info.get('name', hex(abs_address))} with value {value_str} (packed as {hex(value_to_write)}).")
         except Exception as e:
             self.logger.error(f"Error sending write command: {e}", exc_info=True)
             self.statusBar().showMessage(f"Error sending write command: {e}")
