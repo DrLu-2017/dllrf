@@ -23,6 +23,13 @@ BROADCAST_INTERVAL = 0.5 # Seconds for broadcasting snapshots
 MAX_EXECUTOR_WORKERS = 5
 REG_DATA_SNAPSHOT_HEADER = b"REG_SNAP" # 8-byte header for snapshot data
 
+CMD_READ_REG = b"RD_RG" # 5 bytes
+CMD_WRITE_REG = b"WR_RG" # 5 bytes
+RESP_READ_SUCCESS = b"RD_OK" # 5 bytes
+RESP_READ_ERROR = b"RD_ER" # 5 bytes
+RESP_WRITE_SUCCESS = b"WR_OK" # 5 bytes
+RESP_WRITE_ERROR = b"WR_ER" # 5 bytes
+
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -135,7 +142,6 @@ async def poll_hardware_registers():
         await asyncio.sleep(POLL_INTERVAL)
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    """Handles incoming client connections."""
     addr = writer.get_extra_info('peername')
     logger.info(f"Client {addr} connected.")
 
@@ -144,19 +150,112 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
     try:
         while True:
-            # Keep connection alive, read any potential incoming data (e.g. client commands in future)
-            # For now, this server primarily broadcasts, so we just check if client is still connected.
-            data = await reader.read(100) # Read up to 100 bytes
-            if not data:
-                logger.info(f"Client {addr} disconnected (received empty data).")
-                break
-            # If client sends data, log it (for now, no specific client commands are handled)
-            logger.debug(f"Received from {addr}: {data.decode(errors='ignore')}")
-            # Example: Echo back or process command
-            # writer.write(data)
-            # await writer.drain()
+            command = await reader.readexactly(5) # Expect a 5-byte command
+            logger.debug(f"Received command: {command} from {addr}")
 
-    except (asyncio.IncompleteReadError, ConnectionResetError) as e:
+            if command == CMD_READ_REG:
+                # Read address (4 bytes, assuming absolute address fits in uint32)
+                packed_addr = await reader.readexactly(4)
+                abs_address = struct.unpack('>I', packed_addr)[0]
+                logger.info(f"CMD_READ_REG: addr={hex(abs_address)} from {addr}")
+
+                offset = abs_address - DATA_MAP_START
+                if not (0 <= offset < MAP_LEN):
+                    logger.error(f"Read error: Address {hex(abs_address)} (offset {hex(offset)}) out of MMIO range.")
+                    error_msg = f"Address out of range".encode('utf-8')
+                    response = RESP_READ_ERROR + struct.pack('>I', len(error_msg)) + error_msg
+                    writer.write(response)
+                    await writer.drain()
+                    continue
+
+                if mmio_instance is None:
+                    logger.error("Read error: MMIO not initialized.")
+                    error_msg = f"MMIO not initialized".encode('utf-8')
+                    response = RESP_READ_ERROR + struct.pack('>I', len(error_msg)) + error_msg
+                    writer.write(response)
+                    await writer.drain()
+                    continue
+
+                try:
+                    # Perform read using a thread pool executor for potentially blocking MMIO
+                    loop = asyncio.get_running_loop()
+                    value = await loop.run_in_executor(None, mmio_instance.read32, offset)
+                    logger.info(f"Read successful: addr={hex(abs_address)}, offset={hex(offset)}, value={hex(value)}")
+                    # Send RESP_READ_SUCCESS + value (4 bytes)
+                    response = RESP_READ_SUCCESS + struct.pack('>I', value)
+                    writer.write(response)
+                    await writer.drain()
+                except Exception as e:
+                    logger.error(f"MMIO read error for addr {hex(abs_address)} (offset {hex(offset)}): {e}", exc_info=True)
+                    error_msg = str(e).encode('utf-8')
+                    response = RESP_READ_ERROR + struct.pack('>I', len(error_msg)) + error_msg
+                    writer.write(response)
+                    await writer.drain()
+
+            elif command == CMD_WRITE_REG:
+                # Read address (4 bytes) and value (4 bytes)
+                packed_addr = await reader.readexactly(4)
+                abs_address = struct.unpack('>I', packed_addr)[0]
+                packed_val = await reader.readexactly(4)
+                value_to_write = struct.unpack('>I', packed_val)[0]
+                logger.info(f"CMD_WRITE_REG: addr={hex(abs_address)}, value={hex(value_to_write)} from {addr}")
+
+                offset = abs_address - DATA_MAP_START
+                if not (0 <= offset < MAP_LEN):
+                    logger.error(f"Write error: Address {hex(abs_address)} (offset {hex(offset)}) out of MMIO range.")
+                    error_msg = f"Address out of range".encode('utf-8')
+                    response = RESP_WRITE_ERROR + struct.pack('>I', len(error_msg)) + error_msg
+                    writer.write(response)
+                    await writer.drain()
+                    continue
+
+                if mmio_instance is None:
+                    logger.error("Write error: MMIO not initialized.")
+                    error_msg = f"MMIO not initialized".encode('utf-8')
+                    response = RESP_WRITE_ERROR + struct.pack('>I', len(error_msg)) + error_msg
+                    writer.write(response)
+                    await writer.drain()
+                    continue
+
+                try:
+                    # Perform write using a thread pool executor
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, mmio_instance.write32, offset, value_to_write)
+                    logger.info(f"Write successful: addr={hex(abs_address)}, offset={hex(offset)}, value={hex(value_to_write)}")
+                    # Send RESP_WRITE_SUCCESS
+                    writer.write(RESP_WRITE_SUCCESS)
+                    await writer.drain()
+                except Exception as e:
+                    logger.error(f"MMIO write error for addr {hex(abs_address)} (offset {hex(offset)}): {e}", exc_info=True)
+                    error_msg = str(e).encode('utf-8')
+                    response = RESP_WRITE_ERROR + struct.pack('>I', len(error_msg)) + error_msg
+                    writer.write(response)
+                    await writer.drain()
+
+            else:
+                logger.warning(f"Unknown command: {command} from {addr}. Attempting to read more to clear buffer if it was snapshot data.")
+                # This part is tricky. If an unknown command is received, it might be a client
+                # that only expects snapshots, or a desynchronization.
+                # We can't be sure if it's REG_DATA_SNAPSHOT_HEADER.
+                # One strategy: if it's not a known command, assume it's an old client or error, and disconnect.
+                # For now, let's log and then the connection will likely break if client sends more of unexpected format.
+                # Or, we could try to see if the next bytes match the snapshot header.
+                # However, the broadcast task sends snapshots unsolicitedly.
+                # The client handler should primarily focus on direct commands.
+                # For now, let's consider unknown commands as potentially problematic for this handler.
+                # A robust solution might involve a more complex state machine or command prefixing.
+                # For this iteration, we'll log and the client might disconnect if it sends non-command data here.
+                # The original `data = await reader.read(100)` would just log it.
+                # If we want to keep the connection for snapshot-only clients, this logic needs to be different.
+                # But the issue implies this handler is for specific R/W commands.
+                #
+                # Let's assume for now that if a client connects and sends something *other* than
+                # a defined command, it's an error for this R/W path.
+                # The broadcast still goes out to all clients regardless.
+                logger.error(f"Unknown command {command} from {addr}. Closing connection.")
+                break # Break loop and close connection
+
+    except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as e:
         logger.info(f"Client {addr} disconnected abruptly: {e}")
     except Exception as e:
         logger.error(f"Error in handle_client for {addr}: {e}", exc_info=True)
@@ -171,7 +270,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             except Exception as e_close:
                 logger.error(f"Error closing writer for {addr}: {e_close}", exc_info=True)
         logger.info(f"Connection with {addr} fully closed.")
-
 
 async def broadcast_snapshots():
     """Periodically broadcasts the current register snapshot to all connected clients."""
@@ -316,18 +414,24 @@ if __name__ == "__main__":
             f.write("        self.length = length\n")
             f.write(f"        print(f'Dummy MMIO Initialized: base={{hex(base_addr)}}, len={{hex(length)}}')\n")
             f.write("    def read32(self, offset):\n")
-            f.write("        # Simulate reading a value\n")
-            f.write("        if offset == (0x80000000 - 0x80000000): # DUMMY_REG_1\n")
-            f.write("            val = 0x41200000 # Represents 10.0\n")
-            f.write("        elif offset == (0x80000004 - 0x80000000): # DUMMY_REG_2\n")
-            f.write("            val = 0x41A00000 # Represents 20.0\n")
+            f.write("        if hasattr(self, 'written_values') and offset in self.written_values:\n")
+            f.write("            val = self.written_values[offset]\n")
+            f.write("            print(f'[Dummy MMIO] Read32 from offset={{hex(offset)}} (previously written): returning {{hex(val)}}')\n")
+            f.write("            return val\n")
+            f.write("        # Simulate reading a default value if not written\n")
+            f.write("        print(f'[Dummy MMIO] Read32 from offset={{hex(offset)}} (default value)')\n")
+            f.write("        if offset == 0x0: # Corresponds to DUMMY_REG_1 (0x80000000 - 0x80000000)\n")
+            f.write("            val = 0x41200000  # Represents 10.0 as float\n")
+            f.write("        elif offset == 0x4: # Corresponds to DUMMY_REG_2 (0x80000004 - 0x80000000)\n")
+            f.write("            val = 0x41A00000  # Represents 20.0 as float\n")
             f.write("        else:\n")
-            f.write("            val = 0x0 # Default for other offsets\n")
-            f.write(f"        # print(f'Dummy MMIO Read32 from offset {{hex(offset)}}, returning {{hex(val)}}')\n")
+            f.write("            val = 0xDEADBEEF # Default for other offsets\n")
             f.write("        return val\n")
             f.write("    def write32(self, offset, value):\n")
-            f.write(f"        # print(f'Dummy MMIO Write32 to offset {{hex(offset)}} with value {{hex(value)}}')\n")
-            f.write("        pass\n")
+            f.write("        print(f'[Dummy MMIO] Write32: offset={{hex(offset)}}, value={{hex(value)}}')\n")
+            f.write("        if not hasattr(self, 'written_values'):\n")
+            f.write("            self.written_values = {}\n")
+            f.write("        self.written_values[offset] = value\n")
             f.write("    def close(self):\n")
             f.write("        print('Dummy MMIO closed')\n")
             f.write("        pass\n")

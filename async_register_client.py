@@ -9,9 +9,17 @@ from qasync import QEventLoop, asyncSlot, asyncClose
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLineEdit, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
-    QStatusBar, QHeaderView
+    QStatusBar, QHeaderView, QComboBox
 )
 from PyQt5.QtCore import Qt, QTimer # Added QTimer
+
+# Assuming reg_dict.py is in the same directory or Python path.
+try:
+    from reg_dict import reg_dict
+except ImportError:
+    # Fallback if reg_dict.py is not found, to allow UI to load
+    reg_dict = {"ERROR_LOADING_REG_DICT": 0x0}
+
 
 # Constants
 SERVER_HOST_DEFAULT = 'localhost'
@@ -36,6 +44,13 @@ class AsyncClientApp(QMainWindow):
         self.ui_update_queue = asyncio.Queue()
         self.ui_update_timer = QTimer(self) # Initialize QTimer
         self.ui_update_timer.timeout.connect(self.process_ui_queue) # Connect its timeout signal
+
+        # Server response opcodes
+        self.REG_DATA_SNAPSHOT_HEADER = REG_DATA_SNAPSHOT_HEADER
+        self.RESP_READ_SUCCESS = b"RD_OK"
+        self.RESP_READ_ERROR = b"RD_ER"
+        self.RESP_WRITE_SUCCESS = b"WR_OK"
+        self.RESP_WRITE_ERROR = b"WR_ER"
 
     def initUI(self):
         self.setWindowTitle("Async Register Viewer")
@@ -70,6 +85,47 @@ class AsyncClientApp(QMainWindow):
         connection_layout.addStretch(1)
         main_layout.addLayout(connection_layout)
 
+        # Read/Write Operations Layout
+        rw_layout = QHBoxLayout()
+
+        self.reg_combo_label = QLabel("Register:")
+        rw_layout.addWidget(self.reg_combo_label)
+        self.reg_combo = QComboBox()
+        self.reg_combo.setMinimumWidth(200) # Give it some space
+        self.populate_reg_combo() # New method to fill the combo box
+        self.reg_combo.currentTextChanged.connect(self.on_reg_combo_changed)
+        rw_layout.addWidget(self.reg_combo)
+
+        self.addr_label = QLabel("Address:")
+        rw_layout.addWidget(self.addr_label)
+        self.addr_edit = QLineEdit()
+        self.addr_edit.setPlaceholderText("e.g., 0x80080000")
+        rw_layout.addWidget(self.addr_edit)
+
+        self.val_label = QLabel("Value:")
+        rw_layout.addWidget(self.val_label)
+        self.val_edit = QLineEdit()
+        self.val_edit.setPlaceholderText("e.g., 0x41200000 or 10 (for write)") # Allow dec/hex input
+        rw_layout.addWidget(self.val_edit)
+
+        self.read_button = QPushButton("Read")
+        self.read_button.clicked.connect(self.read_register) # New asyncSlot
+        rw_layout.addWidget(self.read_button)
+
+        self.write_button = QPushButton("Write")
+        self.write_button.clicked.connect(self.write_register) # New asyncSlot
+        rw_layout.addWidget(self.write_button)
+
+        rw_layout.addStretch(1)
+        main_layout.addLayout(rw_layout) # Add this new layout to the main_layout
+
+        # Disable R/W UI initially, enable on connect
+        self.reg_combo.setEnabled(False)
+        self.addr_edit.setEnabled(False)
+        self.val_edit.setEnabled(False)
+        self.read_button.setEnabled(False)
+        self.write_button.setEnabled(False)
+
         # Table for register data
         self.tableWidget = QTableWidget()
         self.tableWidget.setColumnCount(2)
@@ -81,6 +137,35 @@ class AsyncClientApp(QMainWindow):
         # Status bar
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready")
+
+    def populate_reg_combo(self):
+        self.reg_combo.addItem("Select Register...", None) # Add a placeholder item
+        if reg_dict and "ERROR_LOADING_REG_DICT" not in reg_dict:
+            for name, address in reg_dict.items():
+                self.reg_combo.addItem(name, address) # Store address as item data
+        else:
+            self.reg_combo.addItem("Error loading registers", None)
+            self.reg_combo.setEnabled(False)
+
+    def on_reg_combo_changed(self, text):
+        address = self.reg_combo.currentData()
+        if address is not None:
+            self.addr_edit.setText(hex(address))
+        elif text == "Select Register...": # Clear if placeholder selected
+             self.addr_edit.setText("")
+
+    # Helper to parse address/value inputs (supporting hex and dec)
+    def _parse_input_value(self, text_value, field_name="Value"):
+        if not text_value:
+            self.statusBar().showMessage(f"Error: {field_name} cannot be empty.")
+            return None
+        try:
+            if text_value.lower().startswith("0x"):
+                return int(text_value, 16)
+            return int(text_value)
+        except ValueError:
+            self.statusBar().showMessage(f"Error: Invalid {field_name} format. Use dec or 0xHEX.")
+            return None
 
     @asyncSlot()
     async def toggle_connection(self):
@@ -103,7 +188,13 @@ class AsyncClientApp(QMainWindow):
                 self.logger.info(f"Connected to server at {ip_address}:{port}.")
                 self.statusBar().showMessage("Connected.")
                 self.connect_button.setText("Disconnect")
-                self.updates_button.setEnabled(True) # Enable "Start Updates"
+                self.updates_button.setEnabled(True)
+                # Enable R/W UI
+                self.reg_combo.setEnabled(True if reg_dict and "ERROR_LOADING_REG_DICT" not in reg_dict else False)
+                self.addr_edit.setEnabled(True)
+                self.val_edit.setEnabled(True)
+                self.read_button.setEnabled(True)
+                self.write_button.setEnabled(True)
                 # Start the task to listen for server data and put it on the queue
                 if self.receive_task is None or self.receive_task.done():
                     self.receive_task = self.loop.create_task(self.receive_server_data_into_queue())
@@ -130,6 +221,13 @@ class AsyncClientApp(QMainWindow):
             self.ui_update_timer.stop() # Stop UI updates on disconnect
             self.updates_button.setText("Start Updates")
             self.updates_button.setEnabled(False)
+            # Disable R/W UI
+            self.reg_combo.setEnabled(False)
+            self.addr_edit.setEnabled(False)
+            self.val_edit.setEnabled(False)
+            self.read_button.setEnabled(False)
+            self.write_button.setEnabled(False)
+            self.val_edit.setText("") # Clear value field on disconnect
 
             if self.receive_task and not self.receive_task.done():
                 self.receive_task.cancel()
@@ -159,31 +257,62 @@ class AsyncClientApp(QMainWindow):
         self.logger.info("Receiver task started.")
         try:
             while self.writer and not self.writer.is_closing():
-                header = await self.reader.readexactly(len(REG_DATA_SNAPSHOT_HEADER))
-                if header == REG_DATA_SNAPSHOT_HEADER:
+                # Try to read a 5-byte header/command first
+                prefix = await self.reader.readexactly(5)
+                self.logger.debug(f"Received prefix: {prefix}")
+
+                if prefix == self.RESP_READ_SUCCESS:
+                    packed_val = await self.reader.readexactly(4)
+                    value = struct.unpack('>I', packed_val)[0]
+                    self.logger.info(f"Read successful: value={hex(value)}")
+                    self.loop.call_soon_threadsafe(self.val_edit.setText, hex(value))
+                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, f"Read successful: {hex(value)}")
+                elif prefix == self.RESP_READ_ERROR:
                     packed_len = await self.reader.readexactly(4)
-                    json_len = struct.unpack('>I', packed_len)[0]
+                    msg_len = struct.unpack('>I', packed_len)[0]
+                    error_msg_bytes = await self.reader.readexactly(msg_len)
+                    error_msg = error_msg_bytes.decode('utf-8')
+                    self.logger.error(f"Read error from server: {error_msg}")
+                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, f"Read error: {error_msg}")
+                elif prefix == self.RESP_WRITE_SUCCESS:
+                    self.logger.info("Write successful.")
+                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, "Write successful.")
+                elif prefix == self.RESP_WRITE_ERROR:
+                    packed_len = await self.reader.readexactly(4)
+                    msg_len = struct.unpack('>I', packed_len)[0]
+                    error_msg_bytes = await self.reader.readexactly(msg_len)
+                    error_msg = error_msg_bytes.decode('utf-8')
+                    self.logger.error(f"Write error from server: {error_msg}")
+                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, f"Write error: {error_msg}")
 
-                    if json_len == 0: # Handle empty snapshot case if server sends it
-                        await self.ui_update_queue.put({})
-                        self.logger.debug("Received empty snapshot.")
-                        continue
-
-                    json_bytes = await self.reader.readexactly(json_len)
-                    snapshot_str = json_bytes.decode('utf-8')
-                    try:
-                        snapshot = json.loads(snapshot_str)
-                        await self.ui_update_queue.put(snapshot)
-                        self.logger.debug(f"Received and queued snapshot of {json_len} bytes.")
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"JSON decode error: {e}. Data: '{snapshot_str}'")
+                elif prefix == self.REG_DATA_SNAPSHOT_HEADER[:5]:
+                    remaining_header = await self.reader.readexactly(len(self.REG_DATA_SNAPSHOT_HEADER) - 5)
+                    full_header = prefix + remaining_header
+                    if full_header == self.REG_DATA_SNAPSHOT_HEADER:
+                        packed_len = await self.reader.readexactly(4)
+                        json_len = struct.unpack('>I', packed_len)[0]
+                        if json_len == 0:
+                            await self.ui_update_queue.put({})
+                            self.logger.debug("Received empty snapshot.")
+                            continue
+                        json_bytes = await self.reader.readexactly(json_len)
+                        snapshot_str = json_bytes.decode('utf-8')
+                        try:
+                            snapshot = json.loads(snapshot_str)
+                            await self.ui_update_queue.put(snapshot)
+                            self.logger.debug(f"Received and queued snapshot of {json_len} bytes.")
+                        except json.JSONDecodeError as e:
+                            self.logger.error(f"JSON decode error: {e}. Data: '{snapshot_str}'")
+                    else:
+                        self.logger.error(f"Corrupted/Unknown data stream. Expected snapshot header, got {full_header}")
+                        await self.handle_disconnection_in_task()
+                        break
                 else:
-                    self.logger.error(f"Unexpected header received: {header}. Expected: {REG_DATA_SNAPSHOT_HEADER}")
-                    await self.handle_disconnection_in_task() # Treat as critical error
+                    self.logger.error(f"Unexpected prefix received: {prefix}. Expected R/W response or snapshot header part.")
+                    await self.handle_disconnection_in_task()
                     break
         except asyncio.CancelledError:
             self.logger.info("Receiver task explicitly cancelled.")
-            # No need to call handle_disconnection_in_task here as cancellation is an external request
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as e:
             self.logger.info(f"Connection lost in receiver task: {e}")
             await self.handle_disconnection_in_task()
@@ -299,6 +428,62 @@ class AsyncClientApp(QMainWindow):
         except Exception as e:
             self.logger.error(f"Error processing UI update queue: {e}", exc_info=True)
 
+    @asyncSlot()
+    async def read_register(self):
+        if self.writer is None or self.writer.is_closing():
+            self.statusBar().showMessage("Not connected to server.")
+            return
+
+        address_str = self.addr_edit.text()
+        abs_address = self._parse_input_value(address_str, "Address")
+        if abs_address is None:
+            return
+
+        self.statusBar().showMessage(f"Reading from {hex(abs_address)}...")
+        try:
+            # CMD_READ_REG is 5 bytes, defined in server
+            cmd = b"RD_RG"
+            packed_addr = struct.pack('>I', abs_address)
+
+            self.writer.write(cmd + packed_addr)
+            await self.writer.drain()
+            self.logger.info(f"Sent READ command for address {hex(abs_address)}.")
+        except Exception as e:
+            self.logger.error(f"Error sending read command: {e}", exc_info=True)
+            self.statusBar().showMessage(f"Error sending read command: {e}")
+
+    @asyncSlot()
+    async def write_register(self):
+        if self.writer is None or self.writer.is_closing():
+            self.statusBar().showMessage("Not connected to server.")
+            return
+
+        address_str = self.addr_edit.text()
+        abs_address = self._parse_input_value(address_str, "Address")
+        if abs_address is None:
+            return
+
+        value_str = self.val_edit.text()
+        value_to_write = self._parse_input_value(value_str, "Value")
+        if value_to_write is None:
+            return
+
+        if not (0 <= value_to_write <= 0xFFFFFFFF):
+            self.statusBar().showMessage("Error: Value out of range for 32-bit register.")
+            return
+
+        self.statusBar().showMessage(f"Writing {hex(value_to_write)} to {hex(abs_address)}...")
+        try:
+            cmd = b"WR_RG"
+            packed_addr = struct.pack('>I', abs_address)
+            packed_val = struct.pack('>I', value_to_write)
+
+            self.writer.write(cmd + packed_addr + packed_val)
+            await self.writer.drain()
+            self.logger.info(f"Sent WRITE command for address {hex(abs_address)} with value {hex(value_to_write)}.")
+        except Exception as e:
+            self.logger.error(f"Error sending write command: {e}", exc_info=True)
+            self.statusBar().showMessage(f"Error sending write command: {e}")
 
     @asyncClose
     async def closeEvent(self, event):
