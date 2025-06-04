@@ -29,7 +29,7 @@ reg_dict = {
     "REG_On_Off_RF": {"address": 0x80090018, "type": "int"},
     
     # Phase rotation registers
-    "REG_float_ph_shift0": {"address": 0x80080030, "type": "float"},
+    "REG_float_ph_shift0": {"address": 0x80080030, "type": "float", "display": True},
     "REG_float_ph_shift1": {"address": 0x80080034, "type": "float"},
     "REG_float_ph_shift2": {"address": 0x80080038, "type": "float"},
     "REG_float_ph_shift3": {"address": 0x8008003c, "type": "float"},

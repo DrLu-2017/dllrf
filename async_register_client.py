@@ -10,7 +10,7 @@ from qasync import QEventLoop, asyncSlot, asyncClose
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLineEdit, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
-    QStatusBar, QHeaderView, QComboBox
+    QStatusBar, QHeaderView, QComboBox, QGroupBox
 )
 from PyQt5.QtCore import Qt, QTimer # Added QTimer
 
@@ -55,6 +55,19 @@ class AsyncClientApp(QMainWindow):
         super().__init__()
         self.loop = loop or asyncio.get_event_loop()
         self.logger = logging.getLogger(__name__) # Logger as instance member
+
+        # Filter reg_dict for display registers
+        self.display_registers = []
+        if reg_dict and "ERROR_LOADING_REG_DICT" not in reg_dict:
+            for name, info in reg_dict.items():
+                if info.get("display") is True:
+                    self.display_registers.append({
+                        "name": name,
+                        "address": info["address"],
+                        "type": info.get("type", "int") # Default to int if type not specified
+                    })
+        self.logger.info(f"Found {len(self.display_registers)} registers to display.")
+
         self.initUI()
 
         self.reader: asyncio.StreamReader = None
@@ -65,6 +78,9 @@ class AsyncClientApp(QMainWindow):
         self.ui_update_timer = QTimer(self) # Initialize QTimer
         self.ui_update_timer.timeout.connect(self.process_ui_queue) # Connect its timeout signal
 
+        self.is_updating_display_registers = False
+        self.pending_display_register_updates = []
+
         # Server response opcodes
         self.REG_DATA_SNAPSHOT_HEADER = REG_DATA_SNAPSHOT_HEADER
         self.RESP_READ_SUCCESS = b"RD_OK"
@@ -74,11 +90,15 @@ class AsyncClientApp(QMainWindow):
 
     def initUI(self):
         self.setWindowTitle("Async Register Viewer")
-        self.setGeometry(100, 100, 700, 500)
+        self.setGeometry(100, 100, 1100, 700) # Increased window size
 
-        main_widget = QWidget(self)
-        self.setCentralWidget(main_widget)
-        main_layout = QVBoxLayout(main_widget)
+        self.central_widget = QWidget(self)
+        self.setCentralWidget(self.central_widget)
+        top_level_layout = QHBoxLayout(self.central_widget)
+
+        # Left side layout (existing controls)
+        left_widget = QWidget()
+        left_v_layout = QVBoxLayout(left_widget)
 
         # Connection layout
         connection_layout = QHBoxLayout()
@@ -99,20 +119,19 @@ class AsyncClientApp(QMainWindow):
 
         self.updates_button = QPushButton("Start Updates")
         self.updates_button.setEnabled(False) # Enabled after connection
-        self.updates_button.clicked.connect(self.toggle_updates) # Placeholder for now
+        self.updates_button.clicked.connect(self.toggle_updates)
         connection_layout.addWidget(self.updates_button)
 
         connection_layout.addStretch(1)
-        main_layout.addLayout(connection_layout)
+        left_v_layout.addLayout(connection_layout)
 
         # Read/Write Operations Layout
         rw_layout = QHBoxLayout()
-
         self.reg_combo_label = QLabel("Register:")
         rw_layout.addWidget(self.reg_combo_label)
         self.reg_combo = QComboBox()
-        self.reg_combo.setMinimumWidth(200) # Give it some space
-        self.populate_reg_combo() # New method to fill the combo box
+        self.reg_combo.setMinimumWidth(200)
+        self.populate_reg_combo()
         self.reg_combo.currentTextChanged.connect(self.on_reg_combo_changed)
         rw_layout.addWidget(self.reg_combo)
 
@@ -125,19 +144,19 @@ class AsyncClientApp(QMainWindow):
         self.val_label = QLabel("Value:")
         rw_layout.addWidget(self.val_label)
         self.val_edit = QLineEdit()
-        self.val_edit.setPlaceholderText("e.g., 0x41200000 or 10 (for write)") # Allow dec/hex input
+        self.val_edit.setPlaceholderText("e.g., 0x41200000 or 10 (for write)")
         rw_layout.addWidget(self.val_edit)
 
         self.read_button = QPushButton("Read")
-        self.read_button.clicked.connect(self.read_register) # New asyncSlot
+        self.read_button.clicked.connect(self.read_register)
         rw_layout.addWidget(self.read_button)
 
         self.write_button = QPushButton("Write")
-        self.write_button.clicked.connect(self.write_register) # New asyncSlot
+        self.write_button.clicked.connect(self.write_register)
         rw_layout.addWidget(self.write_button)
 
         rw_layout.addStretch(1)
-        main_layout.addLayout(rw_layout) # Add this new layout to the main_layout
+        left_v_layout.addLayout(rw_layout)
 
         # Disable R/W UI initially, enable on connect
         self.reg_combo.setEnabled(False)
@@ -146,13 +165,45 @@ class AsyncClientApp(QMainWindow):
         self.read_button.setEnabled(False)
         self.write_button.setEnabled(False)
 
-        # Table for register data
+        # Main data Table for register data (snapshot)
         self.tableWidget = QTableWidget()
         self.tableWidget.setColumnCount(2)
         self.tableWidget.setHorizontalHeaderLabels(["Register Name", "Value"])
         self.tableWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tableWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        main_layout.addWidget(self.tableWidget)
+        left_v_layout.addWidget(self.tableWidget)
+
+        top_level_layout.addWidget(left_widget, 2) # Add left widget with stretch factor 2
+
+        # Right side layout (new display area for monitored registers)
+        right_widget = QWidget()
+        right_v_layout = QVBoxLayout(right_widget)
+
+        display_group_box = QGroupBox("Monitored Registers")
+        display_group_box_layout = QVBoxLayout(display_group_box) # Set layout for the QGroupBox
+
+        self.display_reg_table = QTableWidget()
+        self.display_reg_table.setColumnCount(2)
+        self.display_reg_table.setHorizontalHeaderLabels(["Register Name", "Value"])
+        self.display_reg_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.display_reg_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+
+        # Populate the new table with display_registers
+        self.display_reg_table.setRowCount(len(self.display_registers))
+        for row, reg_info in enumerate(self.display_registers):
+            name_item = QTableWidgetItem(reg_info["name"])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable) # Make name not editable
+
+            value_item = QTableWidgetItem("N/A") # Initial value
+            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable) # Make value not editable initially
+
+            self.display_reg_table.setItem(row, 0, name_item)
+            self.display_reg_table.setItem(row, 1, value_item)
+
+        display_group_box_layout.addWidget(self.display_reg_table)
+        right_v_layout.addWidget(display_group_box)
+
+        top_level_layout.addWidget(right_widget, 1) # Add right widget with stretch factor 1
 
         # Status bar
         self.setStatusBar(QStatusBar())
@@ -191,6 +242,79 @@ class AsyncClientApp(QMainWindow):
             return None
 
     @asyncSlot()
+    async def update_display_registers_values(self):
+        if self.writer is None or self.writer.is_closing():
+            self.logger.info("Not connected, cannot update display registers.")
+            return
+        if not self.display_registers:
+            self.logger.info("No registers marked for display.")
+            return
+
+        if self.is_updating_display_registers:
+            self.logger.warning("Previous display register update was still in progress. Starting a new one.")
+            # For simplicity, assuming any old timeout task will expire harmlessly or be replaced by a new one.
+
+        self.logger.info("Requesting updates for display registers...")
+        self.is_updating_display_registers = True
+        # Create a copy of the list of dictionaries to avoid issues if display_registers itself is modified elsewhere
+        self.pending_display_register_updates = [dict(item) for item in self.display_registers]
+
+
+        original_pending_count = len(self.pending_display_register_updates)
+        current_pending_idx = 0
+        while current_pending_idx < len(self.pending_display_register_updates):
+            reg_info = self.pending_display_register_updates[current_pending_idx]
+            address = reg_info["address"]
+            name = reg_info["name"]
+            try:
+                cmd = b"RD_RG"
+                packed_addr = struct.pack('>I', address)
+                self.writer.write(cmd + packed_addr)
+                await self.writer.drain()
+                self.logger.info(f"Sent READ command for display register {name} at {hex(address)}.")
+                current_pending_idx += 1 # Move to next register
+            except Exception as e:
+                self.logger.error(f"Error sending read for display reg {name}: {e}")
+                # Mark as error in table immediately if send fails
+                for r in range(self.display_reg_table.rowCount()):
+                    if self.display_reg_table.item(r, 0).text() == name:
+                        error_item = QTableWidgetItem(f"Send Error")
+                        error_item.setFlags(error_item.flags() & ~Qt.ItemIsEditable)
+                        error_item.setForeground(Qt.red) # Ensure Qt is imported: from PyQt5.QtCore import Qt
+                        self.display_reg_table.setItem(r, 1, error_item)
+                        break
+                # Remove from pending as we won't get a response for this one
+                self.pending_display_register_updates.pop(current_pending_idx)
+                # Do not increment current_pending_idx as the list has shifted
+
+        if not self.pending_display_register_updates: # All failed to send or list was empty initially
+            self.is_updating_display_registers = False
+            self.logger.info("No pending display registers to update after send attempts (all failed to send or list was empty).")
+            return
+
+        # Schedule a task to reset the state if not all responses arrive within a timeout
+        # This is only scheduled if we successfully sent at least one request
+        asyncio.create_task(self.reset_display_update_state_after_timeout(timeout_seconds=5.0))
+
+    async def reset_display_update_state_after_timeout(self, timeout_seconds):
+        await asyncio.sleep(timeout_seconds)
+        if self.is_updating_display_registers: # If still waiting after timeout
+            self.logger.warning(f"Timeout waiting for all display register updates. Expected {len(self.pending_display_register_updates)} more responses.")
+            # Mark remaining pending registers as timed out in the table
+            # Iterate over a copy for safe removal if needed, though here we just mark
+            for reg_info in list(self.pending_display_register_updates):
+                name = reg_info["name"]
+                for r in range(self.display_reg_table.rowCount()):
+                    if self.display_reg_table.item(r, 0).text() == name:
+                        timeout_item = QTableWidgetItem("Timeout")
+                        timeout_item.setFlags(timeout_item.flags() & ~Qt.ItemIsEditable)
+                        timeout_item.setForeground(Qt.red) # Ensure Qt is imported
+                        self.display_reg_table.setItem(r, 1, timeout_item)
+                        break
+            self.pending_display_register_updates.clear()
+            self.is_updating_display_registers = False # Reset state
+
+    @asyncSlot()
     async def toggle_connection(self):
         if self.writer is None: # Not connected, so connect
             ip_address = self.ip_edit.text()
@@ -221,6 +345,8 @@ class AsyncClientApp(QMainWindow):
                 # Start the task to listen for server data and put it on the queue
                 if self.receive_task is None or self.receive_task.done():
                     self.receive_task = self.loop.create_task(self.receive_server_data_into_queue())
+                # Add this line:
+                asyncio.create_task(self.update_display_registers_values())
             except asyncio.TimeoutError:
                 self.logger.error("Connection timed out.")
                 self.statusBar().showMessage("Connection failed: Timeout.")
@@ -284,36 +410,83 @@ class AsyncClientApp(QMainWindow):
                 prefix = await self.reader.readexactly(5)
                 self.logger.debug(f"Received prefix: {prefix}")
 
-                if prefix == self.RESP_READ_SUCCESS:
+                elif prefix == self.RESP_READ_SUCCESS:
                     packed_val = await self.reader.readexactly(4)
-                    # Server sends value packed as big-endian unsigned int.
-                    # The server's CMD_READ_REG handler uses: struct.pack('>I', value)
-                    # So, client must unpack with '>I'.
                     raw_int_value = struct.unpack('>I', packed_val)[0]
 
-                    self.logger.info(f"Read successful: raw_value={hex(raw_int_value)}")
+                    if self.is_updating_display_registers and self.pending_display_register_updates:
+                        # Get the details of the register this response is for (FIFO assumption)
+                        reg_being_updated = self.pending_display_register_updates.pop(0)
+                        name = reg_being_updated["name"]
+                        reg_type = reg_being_updated["type"]
 
-                    # Convert the raw integer bits to a float
-                    float_value = int_bits_to_float(raw_int_value) # Assumes int_bits_to_float is defined globally or accessible
+                        display_value_str = ""
+                        # Assuming int_bits_to_float function is available globally
+                        if reg_type == "float":
+                            float_val = int_bits_to_float(raw_int_value)
+                            display_value_str = f"{float_val:.7g}"
+                        else: # int type
+                            display_value_str = str(raw_int_value) # Or hex(raw_int_value) as needed
 
-                    # Format float for display (e.g., up to 7 significant digits, or scientific notation if large/small)
-                    # Using .7g should be reasonable for most float values.
-                    float_display_str = f"{float_value:.7g}"
+                        # Update self.display_reg_table
+                        updated_in_table = False
+                        for r in range(self.display_reg_table.rowCount()):
+                            if self.display_reg_table.item(r, 0).text() == name:
+                                value_item = QTableWidgetItem(display_value_str)
+                                value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
+                                self.display_reg_table.setItem(r, 1, value_item)
+                                self.logger.info(f"Display table updated for {name} with value {display_value_str}")
+                                updated_in_table = True
+                                break
+                        if not updated_in_table:
+                            self.logger.warning(f"Received update for {name}, but not found in display table. Value: {display_value_str}")
 
-                    # Update the QLineEdit to show the float value
-                    self.loop.call_soon_threadsafe(self.val_edit.setText, float_display_str)
-
-                    # Update status bar to show both float and raw hex
-                    status_message = f"Read successful: {float_display_str} (raw: {hex(raw_int_value)})"
-                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, status_message)
-                    self.logger.info(status_message)
+                        if not self.pending_display_register_updates: # All expected display registers updated
+                            self.is_updating_display_registers = False
+                            # Cancel any pending timeout task explicitly if we can store it.
+                            # For now, it will just expire without action if it hasn't fired.
+                            self.logger.info("All display registers updated successfully.")
+                    else:
+                        # This is a response for a user-initiated read from the main R/W controls
+                        float_value = int_bits_to_float(raw_int_value)
+                        float_display_str = f"{float_value:.7g}"
+                        self.loop.call_soon_threadsafe(self.val_edit.setText, float_display_str)
+                        status_message = f"Read successful: {float_display_str} (raw: {hex(raw_int_value)})"
+                        self.loop.call_soon_threadsafe(self.statusBar().showMessage, status_message)
+                        self.logger.info(status_message)
                 elif prefix == self.RESP_READ_ERROR:
                     packed_len = await self.reader.readexactly(4)
                     msg_len = struct.unpack('>I', packed_len)[0]
                     error_msg_bytes = await self.reader.readexactly(msg_len)
                     error_msg = error_msg_bytes.decode('utf-8')
-                    self.logger.error(f"Read error from server: {error_msg}")
-                    self.loop.call_soon_threadsafe(self.statusBar().showMessage, f"Read error: {error_msg}")
+
+                    if self.is_updating_display_registers and self.pending_display_register_updates:
+                        # Get the details of the register this error is for (FIFO assumption)
+                        reg_being_updated = self.pending_display_register_updates.pop(0)
+                        name = reg_being_updated["name"]
+                        self.logger.error(f"Read error for display register {name} from server: {error_msg}")
+
+                        # Update self.display_reg_table with error
+                        updated_in_table = False
+                        for r in range(self.display_reg_table.rowCount()):
+                            if self.display_reg_table.item(r, 0).text() == name:
+                                error_item = QTableWidgetItem(f"Error: {error_msg}")
+                                error_item.setFlags(error_item.flags() & ~Qt.ItemIsEditable)
+                                error_item.setForeground(Qt.red) # Ensure Qt is imported
+                                self.display_reg_table.setItem(r, 1, error_item)
+                                updated_in_table = True
+                                break
+                        if not updated_in_table:
+                             self.logger.warning(f"Received error for {name}, but not found in display table. Error: {error_msg}")
+
+                        if not self.pending_display_register_updates: # All expected display registers processed
+                            self.is_updating_display_registers = False
+                            # Cancel any pending timeout task here as well if possible.
+                            self.logger.info("Finished display register update sequence (some with errors).")
+                    else:
+                        # Existing error handling for main R/W controls
+                        self.logger.error(f"Read error from server (main R/W): {error_msg}")
+                        self.loop.call_soon_threadsafe(self.statusBar().showMessage, f"Read error: {error_msg}")
                 elif prefix == self.RESP_WRITE_SUCCESS:
                     self.logger.info("Write successful.")
                     self.loop.call_soon_threadsafe(self.statusBar().showMessage, "Write successful.")
@@ -488,9 +661,15 @@ class AsyncClientApp(QMainWindow):
             self.writer.write(cmd + packed_addr)
             await self.writer.drain()
             self.logger.info(f"Sent READ command for address {hex(abs_address)}.")
+
+            # Add this line to trigger display registers update:
+            asyncio.create_task(self.update_display_registers_values())
+
         except Exception as e:
             self.logger.error(f"Error sending read command: {e}", exc_info=True)
             self.statusBar().showMessage(f"Error sending read command: {e}")
+            # Also trigger update here, as the action is "complete" (though failed)
+            asyncio.create_task(self.update_display_registers_values())
 
     @asyncSlot()
     async def write_register(self):
@@ -539,9 +718,15 @@ class AsyncClientApp(QMainWindow):
             self.writer.write(cmd + packed_addr + packed_val)
             await self.writer.drain()
             self.logger.info(f"Sent WRITE command for {reg_info.get('name', hex(abs_address))} with value {value_str} (packed as {hex(value_to_write)}).")
+
+            # Add this line to trigger display registers update:
+            asyncio.create_task(self.update_display_registers_values())
+
         except Exception as e:
             self.logger.error(f"Error sending write command: {e}", exc_info=True)
             self.statusBar().showMessage(f"Error sending write command: {e}")
+            # Also trigger update here
+            asyncio.create_task(self.update_display_registers_values())
 
     @asyncClose
     async def closeEvent(self, event):
