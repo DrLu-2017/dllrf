@@ -24,19 +24,19 @@ reg_dict = {
     
     # Magnet PI control and RF control
     "REG_MagPI_Open_Close_Loop": {"address": 0x8008007c, "type": "int"},
-    "REG_interlock": {"address": 0x80090010, "type": "int"},          # Note: Active definition (SIMU version)
-    "REG_RF_Sequence": {"address": 0x80090014, "type": "int"},
-    "REG_On_Off_RF": {"address": 0x80090018, "type": "int"},
+    "REG_interlock": {"address": 0x80090010, "type": "int", "display": True},          # Note: Active definition (SIMU version)
+    "REG_RF_Sequence": {"address": 0x80090014, "type": "int", "display": True},
+    "REG_On_Off_RF": {"address": 0x80090018, "type": "int", "display": True},
     
     # Phase rotation registers
     "REG_float_ph_shift0": {"address": 0x80080030, "type": "float", "display": True},
-    "REG_float_ph_shift1": {"address": 0x80080034, "type": "float"},
-    "REG_float_ph_shift2": {"address": 0x80080038, "type": "float"},
-    "REG_float_ph_shift3": {"address": 0x8008003c, "type": "float"},
+    "REG_float_ph_shift1": {"address": 0x80080034, "type": "float", "display": True},
+    "REG_float_ph_shift2": {"address": 0x80080038, "type": "float", "display": True},
+    "REG_float_ph_shift3": {"address": 0x8008003c, "type": "float", "display": True},
     
     # Cavity control registers
-    "REG_CavMag_SetPoint": {"address": 0x80080040, "type": "float"},
-    "REG_CavPhase_SetPoint": {"address": 0x80080044, "type": "float"},
+    "REG_CavMag_SetPoint": {"address": 0x80080040, "type": "float", "display": True},
+    "REG_CavPhase_SetPoint": {"address": 0x80080044, "type": "float", "display": True},
     "REG_Cav_P_gain": {"address": 0x80080048, "type": "float"},
     "REG_Cav_I_gain": {"address": 0x8008004c, "type": "float"},
     "REG_Cav_P_DIV": {"address": 0x80080050, "type": "float"},
