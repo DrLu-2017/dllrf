@@ -67,6 +67,10 @@ class AsyncClientApp(QMainWindow):
                         "type": info.get("type", "int") # Default to int if type not specified
                     })
         self.logger.info(f"Found {len(self.display_registers)} registers to display.")
+        if self.display_registers:
+            self.logger.info(f"Display registers content: {self.display_registers}")
+        else:
+            self.logger.info("No registers to display or list is empty.")
 
         self.initUI()
 
@@ -189,16 +193,20 @@ class AsyncClientApp(QMainWindow):
         self.display_reg_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
 
         # Populate the new table with display_registers
-        self.display_reg_table.setRowCount(len(self.display_registers))
-        for row, reg_info in enumerate(self.display_registers):
-            name_item = QTableWidgetItem(reg_info["name"])
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable) # Make name not editable
+        if hasattr(self, 'display_registers') and self.display_registers:
+            self.display_reg_table.setRowCount(len(self.display_registers))
+            for row, reg_info in enumerate(self.display_registers):
+                name_item = QTableWidgetItem(reg_info["name"])
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
 
-            value_item = QTableWidgetItem("N/A") # Initial value
-            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable) # Make value not editable initially
+                value_item = QTableWidgetItem("N/A") # Initial value
+                value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
 
-            self.display_reg_table.setItem(row, 0, name_item)
-            self.display_reg_table.setItem(row, 1, value_item)
+                self.display_reg_table.setItem(row, 0, name_item)
+                self.display_reg_table.setItem(row, 1, value_item)
+        else:
+            self.display_reg_table.setRowCount(0) # Ensure table is empty if no display registers
+            self.logger.info("No registers marked for display, or display_registers not initialized yet in initUI.")
 
         display_group_box_layout.addWidget(self.display_reg_table)
         right_v_layout.addWidget(display_group_box)
