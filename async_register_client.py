@@ -346,7 +346,7 @@ class AsyncClientApp(QMainWindow):
                 if self.receive_task is None or self.receive_task.done():
                     self.receive_task = self.loop.create_task(self.receive_server_data_into_queue())
                 # Add this line:
-                asyncio.create_task(self.update_display_registers_values())
+                self.update_display_registers_values()
             except asyncio.TimeoutError:
                 self.logger.error("Connection timed out.")
                 self.statusBar().showMessage("Connection failed: Timeout.")
@@ -663,13 +663,13 @@ class AsyncClientApp(QMainWindow):
             self.logger.info(f"Sent READ command for address {hex(abs_address)}.")
 
             # Add this line to trigger display registers update:
-            asyncio.create_task(self.update_display_registers_values())
+            self.update_display_registers_values()
 
         except Exception as e:
             self.logger.error(f"Error sending read command: {e}", exc_info=True)
             self.statusBar().showMessage(f"Error sending read command: {e}")
             # Also trigger update here, as the action is "complete" (though failed)
-            asyncio.create_task(self.update_display_registers_values())
+            self.update_display_registers_values()
 
     @asyncSlot()
     async def write_register(self):
@@ -720,13 +720,13 @@ class AsyncClientApp(QMainWindow):
             self.logger.info(f"Sent WRITE command for {reg_info.get('name', hex(abs_address))} with value {value_str} (packed as {hex(value_to_write)}).")
 
             # Add this line to trigger display registers update:
-            asyncio.create_task(self.update_display_registers_values())
+            self.update_display_registers_values()
 
         except Exception as e:
             self.logger.error(f"Error sending write command: {e}", exc_info=True)
             self.statusBar().showMessage(f"Error sending write command: {e}")
             # Also trigger update here
-            asyncio.create_task(self.update_display_registers_values())
+            self.update_display_registers_values()
 
     @asyncClose
     async def closeEvent(self, event):
