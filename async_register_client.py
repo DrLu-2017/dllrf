@@ -418,7 +418,7 @@ class AsyncClientApp(QMainWindow):
                 prefix = await self.reader.readexactly(5)
                 self.logger.debug(f"Received prefix: {prefix}")
 
-                elif prefix == self.RESP_READ_SUCCESS:
+                if prefix == self.RESP_READ_SUCCESS:
                     packed_val = await self.reader.readexactly(4)
                     raw_int_value = struct.unpack('>I', packed_val)[0]
 
